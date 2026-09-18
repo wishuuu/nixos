@@ -1,0 +1,6 @@
+[submodule "external/nvim"]
+	path = external/nvim
+	url = https://github.com/wishuuu/nvim-cfg
+[submodule "external/dotfiles"]
+	path = external/dotfiles
+	url = https://github.com/wishuuu/dotfiles

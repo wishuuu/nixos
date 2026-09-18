@@ -1,0 +1,225 @@
+#!/usr/bin/env bash
+# Pierwsze uruchomienie: sudo ./setup loki
+# Kolejne: sudo setup loki [--update]; lista: setup --list
+set -Eeuo pipefail
+# Usługa systemd nie czyta profilu powłoki; jej PATH może nie zawierać
+# żadnych narzędzi NixOS. Ustaw go przed pierwszym zewnętrznym poleceniem.
+# Zachowaj też PATH z nix shell, używanego do doładowania zależności.
+export PATH="/run/wrappers/bin:/run/current-system/sw/bin:/nix/var/nix/profiles/default/bin${PATH:+:$PATH}"
+original_args=("$@")
+export NIX_CONFIG="${NIX_CONFIG:-}"$'\nexperimental-features = nix-command flakes'
+
+usage() {
+  printf 'Użycie: %s HOST [--update]\n       %s --list\n' "${0##*/}" "${0##*/}"
+  printf 'Bez --update używa flake.lock; --update odświeża wejścia flake w repo.\n'
+}
+worker=false
+if [[ ${1:-} == --worker ]]; then worker=true; shift; fi
+if [[ ${1:-} == --help || ${1:-} == -h ]]; then usage; exit 0; fi
+[[ $# -ge 1 && $# -le 2 ]] || { usage >&2; exit 2; }
+host=$1
+update=false
+if [[ $# == 2 ]]; then
+  [[ $2 == --update && $host != --list ]] || { usage >&2; exit 2; }
+  update=true
+fi
+[[ $host == --list || $host =~ ^[A-Za-z0-9_-]+$ ]] || {
+  echo 'Nieprawidłowa nazwa hosta.' >&2; exit 2;
+}
+
+self=$(readlink -f -- "${BASH_SOURCE[0]}")
+repo=$(dirname -- "$self")
+if [[ ! -f $repo/flake.nix ]]; then
+  [[ -r /var/lib/nixos-setup/source ]] || {
+    echo 'Najpierw uruchom sudo ./setup HOST z lokalnego repozytorium.' >&2; exit 1;
+  }
+  IFS= read -r repo < /var/lib/nixos-setup/source
+fi
+[[ -f $repo/flake.nix && -f $repo/setup ]] || {
+  printf 'Nie znaleziono repozytorium: %s\n' "$repo" >&2; exit 1;
+}
+repo=$(realpath -- "$repo")
+[[ $repo != /etc/nixos && $repo != /etc/nixos/* ]] || {
+  echo 'Klonuj repo do katalogu domowego; /etc/nixos jest kopią zarządzaną przez setup.' >&2
+  exit 1
+}
+# Świeży obraz NixOS/WSL może jeszcze nie mieć tych narzędzi.
+for tool in rsync jq runuser flock git; do
+  if ! command -v "$tool" >/dev/null 2>&1; then
+    exec nix shell --inputs-from "path:$repo" \
+      nixpkgs#rsync nixpkgs#jq nixpkgs#util-linux nixpkgs#git \
+      --command bash "$self" "${original_args[@]}"
+  fi
+done
+
+# Migawka bez podmodułów: Nix ich nie potrzebuje. Uwzględnia też nowe,
+# niecommitowane pliki, więc git add nie jest warunkiem działania setup.
+make_snapshot() {
+  rsync -a --exclude=.git --exclude=external --exclude='.direnv' \
+    --exclude='result*' --exclude='.env' --exclude='*.key' "$repo/" "$1/"
+}
+list_hosts() {
+  nix eval --json "path:$1#nixosConfigurations" --apply builtins.attrNames |
+    jq -r '.[]'
+}
+
+if [[ $host == --list ]]; then
+  stage=$(mktemp -d)
+  trap 'rm -rf -- "$stage"' EXIT
+  make_snapshot "$stage"
+  list_hosts "$stage"
+  exit 0
+fi
+[[ $EUID -eq 0 ]] || { echo 'Uruchom przez sudo.' >&2; exit 1; }
+
+# Całe wdrożenie działa jako usługa, niezależnie od terminala/środowiska
+# graficznego. Zmiana GDM -> greetd nie przerywa pracy skryptu.
+if ! $worker; then
+  echo "Wdrażanie hosta $host. Budowanie może potrwać."
+  echo 'Log na żywo w drugim terminalu: journalctl -fu nixos-setup.service'
+  args=(--worker "$host")
+  $update && args+=(--update)
+  status=0
+  systemd-run --unit=nixos-setup --description="Wdrożenie NixOS: $host" \
+    --wait --collect --service-type=exec \
+    /run/current-system/sw/bin/bash "$repo/setup" "${args[@]}" || status=$?
+  journalctl -u nixos-setup.service -n 60 --no-pager || true
+  exit "$status"
+fi
+
+exec 9>/run/nixos-setup.lock
+flock -n 9 || { echo 'Inne wdrożenie setup już działa.' >&2; exit 1; }
+# Od tego miejsca zmieniamy wyłącznie system wskazany w argumentach.
+stage=$(mktemp -d /var/tmp/nixos-setup.XXXXXX)
+backup=''
+installed=false
+success=false
+timer_was_active=false
+timer_masked_by_setup=false
+cleanup() {
+  status=$?
+  trap - EXIT
+  if ! $success && $installed; then
+    echo 'Wdrożenie nie powiodło się; przywracam poprzednie źródła /etc/nixos.' >&2
+    rm -rf -- /etc/nixos
+    [[ -z $backup ]] || mv -- "$backup" /etc/nixos
+    echo 'Aktywacja mogła być częściowa. W razie potrzeby: sudo nixos-rebuild switch --rollback' >&2
+  fi
+  if $timer_masked_by_setup; then
+    systemctl unmask --runtime nixos-upgrade.timer || true
+    if $timer_was_active || $success; then
+      systemctl start nixos-upgrade.timer || true
+    fi
+  fi
+  rm -rf -- "$stage"
+  exit "$status"
+}
+trap cleanup EXIT
+
+make_snapshot "$stage"
+hosts=$(list_hosts "$stage")
+if ! grep -Fxq -- "$host" <<< "$hosts"; then
+  printf 'Nieznany host: %s\nDostępne hosty:\n%s\n' "$host" "$hosts" >&2
+  exit 2
+fi
+
+# Użytkownik docelowy jest jawny, wspólny dla obecnych hostów.
+user=oskarw
+home=$(nix eval --raw "path:$stage#nixosConfigurations.$host.config.users.users.$user.home")
+profile=cli
+if [[ $(nix eval --json "path:$stage#nixosConfigurations.$host.config.programs.hyprland.enable") == true ]]; then
+  profile=desktop
+fi
+is_wsl=$(nix eval --json "path:$stage#nixosConfigurations.$host.config" \
+  --apply 'c: c.wsl.enable or false')
+if [[ $is_wsl == true ]] && ! grep -qi microsoft /proc/sys/kernel/osrelease; then
+  echo 'Host WSL można wdrożyć tylko wewnątrz WSL.' >&2; exit 1
+fi
+if [[ $is_wsl != true ]] && grep -qi microsoft /proc/sys/kernel/osrelease; then
+  echo 'Nie wdrażaj konfiguracji fizycznego laptopa w WSL.' >&2; exit 1
+fi
+
+# Nie uruchamiaj Git jako root w repo użytkownika.
+owner=$(stat -c '%U' "$repo")
+as_owner() { runuser -u "$owner" -- env HOME="$(getent passwd "$owner" | cut -d: -f6)" "$@"; }
+# Nie resetujemy istniejących podmodułów: lokalne, niecommitowane zmiany są ważne.
+for sub in dotfiles nvim; do
+  required=install.sh
+  [[ $sub != nvim ]] || required=init.lua
+  if [[ ! -f $repo/external/$sub/$required ]]; then
+    as_owner git -C "$repo" submodule update --init --recursive -- "external/$sub"
+  fi
+done
+if $update; then
+  echo 'Aktualizowanie flake.lock w repozytorium...'
+  as_owner nix flake update --flake "path:$repo"
+  rm -rf -- "$stage"
+  stage=$(mktemp -d /var/tmp/nixos-setup.XXXXXX)
+  make_snapshot "$stage"
+fi
+
+if systemctl is-active --quiet nixos-upgrade.service; then
+  echo 'Trwa automatyczna aktualizacja. Poczekaj i uruchom setup ponownie.' >&2; exit 1
+fi
+if systemctl is-active --quiet nixos-upgrade.timer; then
+  timer_was_active=true
+  systemctl stop nixos-upgrade.timer
+fi
+# Aktywacja nowej konfiguracji nie może wystartować timera w połowie wdrożenia.
+# Nie zdejmujemy masek ustawionych wcześniej przez administratora.
+timer_state=$(systemctl is-enabled nixos-upgrade.timer 2>/dev/null || true)
+if [[ $timer_state != masked && $timer_state != masked-runtime ]]; then
+  systemctl mask --runtime nixos-upgrade.timer
+  timer_masked_by_setup=true
+fi
+# Ponowna kontrola zamyka okno pomiędzy pierwszym sprawdzeniem a zatrzymaniem timera.
+if systemctl is-active --quiet nixos-upgrade.service; then
+  echo 'Właśnie ruszyła automatyczna aktualizacja. Spróbuj później.' >&2; exit 1
+fi
+
+echo "Budowanie $host (jeszcze bez aktywacji)..."
+nix build --no-link "path:$stage#nixosConfigurations.$host.config.system.build.toplevel"
+
+# Ochrona istniejącego źródła konfiguracji. Kopii nie usuwamy po sukcesie.
+if [[ -e /etc/nixos || -L /etc/nixos ]]; then
+  backup="/etc/nixos.before-setup-$(date +%Y%m%d-%H%M%S)-$$"
+  mv -- /etc/nixos "$backup"
+fi
+installed=true
+install -d -m 0755 /etc/nixos
+cp -a -- "$stage/." /etc/nixos/
+chown -R root:root /etc/nixos
+chmod -R go-w /etc/nixos
+
+echo 'Aktywowanie systemu...'
+nixos-rebuild switch --flake "path:/etc/nixos#$host"
+
+# Pierwsze wdrożenie WSL może dopiero utworzyć konto oskarw. Jeżeli repo
+# było klonowane przez root/innego użytkownika, przygotuj prywatną kopię.
+getent passwd "$user" >/dev/null
+if ! runuser -u "$user" -- test -w "$repo" || \
+   ! runuser -u "$user" -- test -r "$repo/external/dotfiles/install.sh"; then
+  destination="$home/nixos"
+  [[ ! -e $destination && ! -L $destination ]] || {
+    echo "Nie mogę przygotować repo dla $user: $destination już istnieje." >&2; exit 1;
+  }
+  echo "Kopiowanie repo dla $user do $destination..."
+  cp -a -- "$repo" "$destination"
+  chown -R "$user:$(id -gn "$user")" "$destination"
+  repo=$destination
+fi
+
+echo "Podłączanie dotfiles i skryptów ($profile)..."
+runuser -u "$user" -- env HOME="$home" XDG_CONFIG_HOME="$home/.config" \
+  DOTFILES_BACKUP_DIR="$home/.local/state/dotfiles-backups/$(date +%Y%m%d-%H%M%S)-$$" \
+  bash "$repo/scripts/link-dotfiles.sh" "$profile"
+
+install -d -m 0755 /var/lib/nixos-setup
+printf '%s\n' "$repo" > /var/lib/nixos-setup/source
+chmod 0644 /var/lib/nixos-setup/source
+success=true
+printf '\nGotowe: %s. Repozytorium: %s\n' "$host" "$repo"
+[[ -z $backup ]] || printf 'Poprzednia konfiguracja systemu: %s\n' "$backup"
+echo 'Kopie kolidujących dotfiles: ~/.local/state/dotfiles-backups/'
+echo 'Nie wykonano restartu ani commitów. Po pierwszym wdrożeniu zaloguj się ponownie.'
+echo 'Jeśli zmienił się kernel, uruchom komputer ponownie w dogodnym momencie.'
