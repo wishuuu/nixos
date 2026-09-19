@@ -250,15 +250,21 @@ zellij list-sessions
 zellij attach dev     # powrót do istniejącej sesji
 ```
 
-Nie uruchamia się automatycznie w każdym terminalu. Konfiguracja:
-`~/.config/zellij/config.kdl`, motyw Catppuccin Mocha, powłoka Fish.
+Ghostty automatycznie tworzy/przywraca sesję `main` (także w nowych oknach).
+Konfiguracja: `~/.config/zellij/config.kdl`, Catppuccin Mocha, powłoka Fish.
 Startuje w trybie `locked`, żeby skróty nie kolidowały z Neovimem:
 
-- `Ctrl+g` — odblokuj/zablokuj skróty Zellij;
-- po odblokowaniu `Ctrl+p`, potem `r` / `d` — panel po prawej / poniżej;
-- po odblokowaniu `Ctrl+t`, potem `n` — nowa karta;
-- po odblokowaniu `Ctrl+o`, potem `d` — odłącz sesję, zostawiając procesy;
-- `Ctrl+g` — wróć do trybu pracy w aplikacji.
+- `Ctrl+a` — wejście do trybu Tab;
+- `Ctrl+a`, `1…9` / strzałka — wybór taba i powrót do Locked;
+- `Ctrl+a`, `n` — nowy tab i powrót do Locked;
+- `Ctrl+a`, `Ctrl+a` — ostatnio aktywny tab i powrót do Locked;
+- `Ctrl+a`, `Esc` — anulowanie i powrót do Locked;
+- `Ctrl+a`, `Ctrl+p`, `r` / `d` — panel po prawej / poniżej;
+- `Ctrl+a`, `Ctrl+o`, `d` — odłączenie sesji (okno Ghostty kończy działanie).
+
+Przejścia do pozostałych trybów i ich bindy pozostają domyślne, w tym powrót
+do Normal po ich akcjach. W tych trybach `Ctrl+g` nadal blokuje skróty.
+`sese` przełącza z `main` na sesję projektu, bez zagnieżdżania Zellij.
 
 Pasek na dole pokazuje dostępne akcje. Przy zaznaczaniu tekstu w terminalu
 przytrzymaj Shift, jeśli Zellij przechwytuje mysz. Odtwarzanie sesji z dysku
