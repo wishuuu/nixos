@@ -251,7 +251,11 @@ zellij attach dev     # powrót do istniejącej sesji
 ```
 
 Ghostty automatycznie tworzy/przywraca sesję `main` (także w nowych oknach).
-Konfiguracja: `~/.config/zellij/config.kdl`, Catppuccin Mocha, powłoka Fish.
+Konfiguracja: `~/.config/zellij/config.kdl`, Nord, powłoka Fish.
+Pulpit Nord, panel sterowania i skróty opisano w
+[`external/dotfiles/README.md`](external/dotfiles/README.md#pulpit-nord).
+Hyprland używa teraz `hyprland.lua` i `bindings.lua`; migracja wymaga ponownego
+logowania po przebudowie systemu.
 Startuje w trybie `locked`, żeby skróty nie kolidowały z Neovimem:
 
 - `Ctrl+a` — wejście do trybu Tab;
