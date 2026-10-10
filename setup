@@ -93,21 +93,26 @@ flock -n 9 || { echo 'Inne wdrożenie setup już działa.' >&2; exit 1; }
 stage=$(mktemp -d /var/tmp/nixos-setup.XXXXXX)
 backup=''
 installed=false
+activated=false
 success=false
 timer_was_active=false
 timer_masked_by_setup=false
 cleanup() {
   status=$?
   trap - EXIT
-  if ! $success && $installed; then
+  if ! $activated && $installed; then
     echo 'Wdrożenie nie powiodło się; przywracam poprzednie źródła /etc/nixos.' >&2
     rm -rf -- /etc/nixos
     [[ -z $backup ]] || mv -- "$backup" /etc/nixos
     echo 'Aktywacja mogła być częściowa. W razie potrzeby: sudo nixos-rebuild switch --rollback' >&2
   fi
+  if $activated && ! $success; then
+    echo 'System został aktywowany, ale konfiguracja użytkownika nie została ukończona.' >&2
+    echo 'Zachowuję nowe /etc/nixos. Sprawdź log i ponów setup; dotfiles mogły zmienić się częściowo.' >&2
+  fi
   if $timer_masked_by_setup; then
     systemctl unmask --runtime nixos-upgrade.timer || true
-    if $timer_was_active || $success; then
+    if $timer_was_active || $activated; then
       systemctl start nixos-upgrade.timer || true
     fi
   fi
@@ -193,6 +198,7 @@ chmod -R go-w /etc/nixos
 
 echo 'Aktywowanie systemu...'
 nixos-rebuild switch --flake "path:/etc/nixos#$host"
+activated=true
 
 # Pierwsze wdrożenie WSL może dopiero utworzyć konto oskarw. Jeżeli repo
 # było klonowane przez root/innego użytkownika, przygotuj prywatną kopię.

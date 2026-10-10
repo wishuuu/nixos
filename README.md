@@ -70,10 +70,15 @@ Skrypt nie partycjonuje dysków, nie instaluje systemu z ISO, nie loguje do GitH
 ani aplikacji i nie restartuje komputera. Po pierwszym wdrożeniu zaloguj się
 ponownie, a po zmianie kernela uruchom system ponownie w dogodnym momencie.
 Konfiguracja sprzętowa `loki` pasuje tylko do obecnego laptopa.
+`hosts/loki/audio.nix` instaluje profil mikrofonu ALC256: wybiera fizyczne wejście
+`Internal Mic 1` zamiast niepodłączonego `Internal Mic`. Profil dotyczy tylko
+mikrofonu wewnętrznego; wejście zestawu słuchawkowego zachowuje standardowy profil.
 
-Błąd budowania nie aktywuje systemu. Błąd po podmianie `/etc/nixos` przywraca
-poprzednie źródła, ale **nie cofa automatycznie częściowej aktywacji ani dotfiles**.
-Sprawdź log i w razie potrzeby wykonaj rollback poniżej. Kopie zapasowe nie są
+Błąd budowania nie aktywuje systemu. Jeśli aktywacja nie zakończy się sukcesem,
+setup przywraca poprzednie źródła `/etc/nixos`, ale **nie cofa automatycznie
+częściowej aktywacji**. Po udanej aktywacji błąd konfiguracji użytkownika zachowuje
+nowy system i jego źródła; dotfiles mogły zmienić się częściowo. Sprawdź log i ponów
+setup, a w razie potrzeby wykonaj rollback poniżej. Kopie zapasowe nie są
 automatycznie usuwane. Zachowaj potrzebne, a stare usuń ręcznie po weryfikacji.
 
 Na ekranie greetd zaloguj się jako `oskarw`. Po ponownym logowaniu działa Fish
@@ -97,13 +102,13 @@ stare generacje po 14 dniach; menu bootloadera ma limit 10 wpisów.
 ## Aktualizacje
 
 Oba hosty: niedziela ok. 04:00, losowe opóźnienie do 45 min; pominięty termin jest
-nadrabiany po uruchomieniu. System buduje i aktywuje nową wersję bez restartu.
+nadrabiany po uruchomieniu. System buduje i aktywuje konfigurację bez restartu.
 Kernel zacznie działać po ręcznym restarcie. Aktywacja może restartować usługi.
 
-Usługa używa rootowej kopii `/etc/nixos`, odświeża `nixpkgs`, ale nie zapisuje
-nowego `flake.lock`. Zen i NixOS-WSL pozostają przypięte do swoich rewizji.
-To kompromis: automatycznie aktualizowany system może różnić się od locka repo.
-Dla w pełni utrwalonej aktualizacji wykonuj okresowo:
+Usługa używa rootowej kopii `/etc/nixos` i wyłącznie wersji przypiętych w jej
+`flake.lock`. Nie aktualizuje wejść i odmawia wdrożenia wymagającego zmiany locka.
+Timer sam nie pobiera nowych wersji pakietów, także poprawek bezpieczeństwa.
+Aktualizacje wersji wykonuj jawnie i regularnie (dla WSL użyj hosta `wsl`):
 
 ```sh
 sudo setup loki --update
@@ -219,6 +224,9 @@ sesji. Istniejąca sesja zachowuje swoje panele i katalogi; nowa startuje w wybr
 katalogu. Uruchomienie wewnątrz Zellij przełącza sesję bez zagnieżdżania.
 
 Testy logiki (atrapy fzf i Zellij): `bash scripts/test-sese.sh`.
+Regresje wdrożenia bez aktywacji systemu: `bash scripts/test-setup.sh` oraz
+`bash scripts/test-setup-cleanup.sh`. Odświeżanie panelu bez GUI:
+`python3 external/dotfiles/tests/panel-async.py` (wymaga tylko Pythona 3).
 
 ## GitHub CLI i Zellij
 

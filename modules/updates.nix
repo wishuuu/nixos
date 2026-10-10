@@ -8,6 +8,8 @@
     randomizedDelaySec = "45min";
     persistent = true;
     allowReboot = false;
-    flags = [ "--refresh" "--update-input" "nixpkgs" "--no-write-lock-file" ];
+    # Automat wdraża wyłącznie wersje z locka. Zmiany: setup HOST --update.
+    upgrade = false;
+    flags = [ "--no-update-lock-file" ];
   };
 }

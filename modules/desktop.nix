@@ -35,7 +35,10 @@
     inputs.zen-browser.packages.${pkgs.stdenv.hostPlatform.system}.default
     discord nordpass spotify libreoffice-stable vlc
     ghostty waybar fuzzel mako hypridle swaybg
-    nordic papirus-icon-theme
+    nordic papirus-icon-theme adwaita-icon-theme
+    (pkgs.writeShellScriptBin "nord-polkit-agent" ''
+      exec ${pkgs.polkit_gnome}/libexec/polkit-gnome-authentication-agent-1 "$@"
+    '')
     (let
       python = pkgs.python3.withPackages (ps: [ ps.pygobject3 ]);
     in pkgs.writeShellScriptBin "nord-panel" ''
